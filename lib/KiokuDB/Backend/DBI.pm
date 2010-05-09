@@ -332,11 +332,14 @@ sub insert_rows {
 
         if ( $self->extract ) {
             if ( my @ids = map { @{ $_->{id} || [] } } $insert, $update ) {
-                my $del_gin_sth = $dbh->prepare_cached("DELETE FROM gin_index WHERE id IN (" . join(", ", ('?') x @ids) . ")");
+                my @ids_copy = @ids;
+                while (my @batch_ids = splice @ids_copy, 0, 999) {
+                    my $del_gin_sth = $dbh->prepare_cached("DELETE FROM gin_index WHERE id IN (" . join(", ", ('?') x @batch_ids) . ")");
 
-                $del_gin_sth->execute(@ids);
+                    $del_gin_sth->execute(@batch_ids);
 
-                $del_gin_sth->finish;
+                    $del_gin_sth->finish;
+                }
             }
         }
 
@@ -420,24 +423,31 @@ sub get {
 
         my $sth;
 
-        if ( @ids ) {
-            $sth = $dbh->prepare_cached("SELECT id, data FROM entries WHERE id IN (" . join(", ", ('?') x @ids) . ")");
-            $sth->execute(@ids);
-        } else {
-            $sth = $dbh->prepare_cached("SELECT id, data FROM entries");
-            $sth->execute;
-        }
+        my @ids_copy = @ids;
+        my @batch_ids;
+        {
+            if ( @ids ) {
+                @batch_ids = splice(@ids_copy, 0, 999);
+                $sth = $dbh->prepare_cached("SELECT id, data FROM entries WHERE id IN (" . join(", ", ('?') x @batch_ids) . ")");
+                $sth->execute(@batch_ids);
+            } else {
+                $sth = $dbh->prepare_cached("SELECT id, data FROM entries");
+                $sth->execute;
+            }
 
-        $sth->bind_columns( \my ( $id, $data ) );
+            $sth->bind_columns( \my ( $id, $data ) );
 
-        # not actually necessary but i'm keeping it around for reference:
-        #my ( $id, $data );
-        #use DBD::Pg qw(PG_BYTEA);
-        #$sth->bind_col(1, \$id);
-        #$sth->bind_col(2, \$data, { pg_type => PG_BYTEA });
+            # not actually necessary but i'm keeping it around for reference:
+            #my ( $id, $data );
+            #use DBD::Pg qw(PG_BYTEA);
+            #$sth->bind_col(1, \$id);
+            #$sth->bind_col(2, \$data, { pg_type => PG_BYTEA });
 
-        while ( $sth->fetch ) {
-            $entries{$id} = $data;
+            while ( $sth->fetch ) {
+                $entries{$id} = $data;
+            }
+            # crank some more if there are batches left
+            redo if @ids_copy;
         }
     });
 
@@ -454,16 +464,19 @@ sub delete {
 
         my @ids = map { ref($_) ? $_->id : $_ } @ids_or_entries;
 
-        if ( $self->extract ) {
-            # FIXME rely on cascade delete?
-            my $sth = $dbh->prepare_cached("DELETE FROM gin_index WHERE id IN (" . join(", ", ('?') x @ids) . ")");
-            $sth->execute(@ids);
+        my @ids_copy = @ids;
+        while (my @batch_ids = splice @ids_copy, 0, 999) {
+            if ( $self->extract ) {
+                # FIXME rely on cascade delete?
+                my $sth = $dbh->prepare_cached("DELETE FROM gin_index WHERE id IN (" . join(", ", ('?') x @batch_ids) . ")");
+                $sth->execute(@batch_ids);
+                $sth->finish;
+            }
+
+            my $sth = $dbh->prepare_cached("DELETE FROM entries WHERE id IN (" . join(", ", ('?') x @batch_ids) . ")");
+            $sth->execute(@batch_ids);
             $sth->finish;
         }
-
-        my $sth = $dbh->prepare_cached("DELETE FROM entries WHERE id IN (" . join(", ", ('?') x @ids) . ")");
-        $sth->execute(@ids);
-        $sth->finish;
     });
 
     return;
@@ -477,12 +490,15 @@ sub exists {
     $self->dbh_do(sub {
         my ( $storage, $dbh ) = @_;
 
-        my $sth = $dbh->prepare_cached("SELECT id FROM entries WHERE id IN (" . join(", ", ('?') x @ids) . ")");
-        $sth->execute(@ids);
+        my @ids_copy = @ids;
+        while (my @batch_ids = splice @ids_copy, 0, 999) {
+            my $sth = $dbh->prepare_cached("SELECT id FROM entries WHERE id IN (" . join(", ", ('?') x @batch_ids) . ")");
+            $sth->execute(@batch_ids);
 
-        $sth->bind_columns( \( my $id ) );
+            $sth->bind_columns( \( my $id ) );
 
-        $entries{$id} = undef while $sth->fetch;
+            $entries{$id} = undef while $sth->fetch;
+        }
     });
 
     map { exists $entries{$_} } @ids;
