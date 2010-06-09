@@ -919,6 +919,15 @@ Defaults to
 
     { on_connect_call => $self->on_connect_call }
 
+=item batch_size
+
+SQL that deals with entries run in batches of the amount provided in
+C<batch_size>. If it is not provided, the statements will run in a single
+batch.
+
+This solves the issue with SQLite where lists can only handle 999
+elements at a time.
+
 =back
 
 =head1 METHODS
