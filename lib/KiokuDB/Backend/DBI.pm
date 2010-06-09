@@ -249,6 +249,26 @@ sub _build_sql_abstract {
     SQL::Abstract->new;
 }
 
+# use a Maybe so we can force undef in the builder
+has batch_size => (
+    isa => "Maybe[Int]",
+    is  => "ro",
+    lazy => 1,
+    builder => '_build_batch_size',
+);
+
+sub _build_batch_size {
+    my $self = shift;
+
+    if ($self->storage->sqlt_type eq 'SQLite') {
+        return 999;
+    } else {
+        return undef;
+    }
+}
+
+sub has_batch_size { defined shift->batch_size }
+
 sub insert {
     my ( $self, @entries ) = @_;
 
@@ -332,8 +352,11 @@ sub insert_rows {
 
         if ( $self->extract ) {
             if ( my @ids = map { @{ $_->{id} || [] } } $insert, $update ) {
+
+                my $batch_size = $self->has_batch_size ? $self->batch_size : scalar(@ids);
+
                 my @ids_copy = @ids;
-                while (my @batch_ids = splice @ids_copy, 0, 999) {
+                while (my @batch_ids = splice @ids_copy, 0, $batch_size) {
                     my $del_gin_sth = $dbh->prepare_cached("DELETE FROM gin_index WHERE id IN (" . join(", ", ('?') x @batch_ids) . ")");
 
                     $del_gin_sth->execute(@batch_ids);
@@ -427,7 +450,10 @@ sub get {
         my @batch_ids;
         {
             if ( @ids ) {
-                @batch_ids = splice(@ids_copy, 0, 999);
+
+                my $batch_size = $self->has_batch_size ? $self->batch_size : scalar(@ids);
+
+                @batch_ids = splice(@ids_copy, 0, $batch_size);
                 $sth = $dbh->prepare_cached("SELECT id, data FROM entries WHERE id IN (" . join(", ", ('?') x @batch_ids) . ")");
                 $sth->execute(@batch_ids);
             } else {
@@ -464,8 +490,10 @@ sub delete {
 
         my @ids = map { ref($_) ? $_->id : $_ } @ids_or_entries;
 
+        my $batch_size = $self->has_batch_size ? $self->batch_size : scalar(@ids);
+
         my @ids_copy = @ids;
-        while (my @batch_ids = splice @ids_copy, 0, 999) {
+        while (my @batch_ids = splice @ids_copy, 0, $batch_size) {
             if ( $self->extract ) {
                 # FIXME rely on cascade delete?
                 my $sth = $dbh->prepare_cached("DELETE FROM gin_index WHERE id IN (" . join(", ", ('?') x @batch_ids) . ")");
@@ -490,8 +518,10 @@ sub exists {
     $self->dbh_do(sub {
         my ( $storage, $dbh ) = @_;
 
+        my $batch_size = $self->has_batch_size ? $self->batch_size : scalar(@ids);
+
         my @ids_copy = @ids;
-        while (my @batch_ids = splice @ids_copy, 0, 999) {
+        while (my @batch_ids = splice @ids_copy, 0, $batch_size) {
             my $sth = $dbh->prepare_cached("SELECT id FROM entries WHERE id IN (" . join(", ", ('?') x @batch_ids) . ")");
             $sth->execute(@batch_ids);
 
