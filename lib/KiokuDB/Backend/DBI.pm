@@ -926,7 +926,8 @@ C<batch_size>. If it is not provided, the statements will run in a single
 batch.
 
 This solves the issue with SQLite where lists can only handle 999
-elements at a time.
+elements at a time. C<batch_size> will be set to 999 by default if the
+driver in use is SQLite.
 
 =back
 
